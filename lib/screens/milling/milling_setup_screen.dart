@@ -5,6 +5,7 @@ import 'package:animate_do/animate_do.dart';
 import 'package:sunu_moulin_smarteco/l10n/app_localizations.dart';
 import 'package:sunu_moulin_smarteco/widgets/modern_button.dart';
 import 'package:sunu_moulin_smarteco/widgets/glass_card.dart';
+import 'package:sunu_moulin_smarteco/providers/app_providers.dart';
 
 class MillingSetupScreen extends ConsumerStatefulWidget {
   const MillingSetupScreen({super.key});
@@ -53,7 +54,13 @@ class _MillingSetupScreenState extends ConsumerState<MillingSetupScreen> {
               child: ModernButton(
                 label: l10n.startMilling,
                 icon: Icons.play_arrow_rounded,
-                onPressed: () => context.push('/milling-control'),
+                onPressed: () {
+                  ref.read(bleServiceProvider).startSensorSimulation(
+                    grain: _selectedGrain,
+                    quantity: _quantity,
+                  );
+                  context.push('/milling-control');
+                },
               ),
             ),
           ],

@@ -43,23 +43,28 @@ class ModernButton extends StatelessWidget {
               width: 24,
               child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
             )
-          : Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                if (icon != null) ...[
-                  Icon(icon, size: 20),
-                  const SizedBox(width: 12),
-                ],
-                Text(
-                  label,
-                  style: const TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.bold,
-                    letterSpacing: 0.5,
+            : Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                mainAxisSize: MainAxisSize.min, // S'adapte à la taille du contenu
+                children: [
+                  if (icon != null) ...[
+                    Icon(icon, size: 20),
+                    const SizedBox(width: 8), // Réduit l'espace un peu
+                  ],
+                  Flexible(
+                    child: Text(
+                      label,
+                      style: const TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                        letterSpacing: 0.5,
+                      ),
+                      overflow: TextOverflow.ellipsis,
+                      maxLines: 1,
+                    ),
                   ),
-                ),
-              ],
-            ),
+                ],
+              ),
     );
   }
 }

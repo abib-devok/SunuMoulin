@@ -47,5 +47,6 @@ final voiceServiceProvider = Provider<VoiceService>((ref) {
 
 // Fournit une instance unique du BleService.
 final bleServiceProvider = ChangeNotifierProvider<BleService>((ref) {
-  return BleService();
+  final storage = ref.watch(storageServiceProvider);
+  return BleService(storage);
 });

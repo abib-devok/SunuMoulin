@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -5,6 +6,7 @@ import 'package:animate_do/animate_do.dart';
 import 'package:sunu_moulin_smarteco/l10n/app_localizations.dart';
 import 'package:sunu_moulin_smarteco/widgets/modern_button.dart';
 import 'package:sunu_moulin_smarteco/widgets/glass_card.dart';
+import 'package:sunu_moulin_smarteco/providers/app_providers.dart';
 
 class MillingControlScreen extends ConsumerStatefulWidget {
   const MillingControlScreen({super.key});
@@ -14,9 +16,10 @@ class MillingControlScreen extends ConsumerStatefulWidget {
 }
 
 class _MillingControlScreenState extends ConsumerState<MillingControlScreen> with TickerProviderStateMixin {
-  double _progress = 0.0;
-  bool _isPaused = false;
   late AnimationController _pulseController;
+  StreamSubscription? _sensorSubscription;
+  double _currentProgress = 0.0;
+  bool _finished = false;
 
   @override
   void initState() {
@@ -26,19 +29,21 @@ class _MillingControlScreenState extends ConsumerState<MillingControlScreen> wit
       duration: const Duration(seconds: 2),
     )..repeat(reverse: true);
 
-    _simulateProgress();
-  }
-
-  void _simulateProgress() async {
-    while (_progress < 1.0 && mounted) {
-      if (!_isPaused) {
-        setState(() => _progress += 0.01);
+    // Écoute les données du capteur pour mettre à jour l'UI locale
+    final bleService = ref.read(bleServiceProvider);
+    _currentProgress = bleService.millingProgress;
+    
+    _sensorSubscription = bleService.sensorDataStream.listen((data) {
+      if (mounted) {
+        setState(() {
+          _currentProgress = data['progress'] ?? 0.0;
+        });
+        if (_currentProgress >= 1.0 && !_finished) {
+          _finished = true;
+          _showSuccess();
+        }
       }
-      await Future.delayed(const Duration(milliseconds: 500));
-    }
-    if (mounted && _progress >= 1.0) {
-      _showSuccess();
-    }
+    });
   }
 
   void _showSuccess() {
@@ -67,6 +72,7 @@ class _MillingControlScreenState extends ConsumerState<MillingControlScreen> wit
 
   @override
   void dispose() {
+    _sensorSubscription?.cancel();
     _pulseController.dispose();
     super.dispose();
   }
@@ -75,6 +81,7 @@ class _MillingControlScreenState extends ConsumerState<MillingControlScreen> wit
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context)!;
     final theme = Theme.of(context);
+    final isMilling = ref.watch(bleServiceProvider.select((s) => s.isMilling));
 
     return Scaffold(
       appBar: AppBar(title: Text(l10n.millControlTitle)),
@@ -88,7 +95,7 @@ class _MillingControlScreenState extends ConsumerState<MillingControlScreen> wit
               const SizedBox(height: 48),
               FadeInUp(
                 child: Text(
-                  _isPaused ? "En pause" : "Mouture en cours...",
+                  !isMilling && _currentProgress < 1.0 ? "En pause" : "Mouture en cours...",
                   style: theme.textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.bold),
                 ),
               ),
@@ -96,7 +103,7 @@ class _MillingControlScreenState extends ConsumerState<MillingControlScreen> wit
               FadeInUp(
                 delay: const Duration(milliseconds: 200),
                 child: Text(
-                  "Temps restant estimé : 2 min",
+                  "Temps restant estimé : ${((1.0 - _currentProgress) * 100).toInt()} sec",
                   style: theme.textTheme.bodyLarge?.copyWith(color: theme.colorScheme.onSurface.withOpacity(0.5)),
                 ),
               ),
@@ -121,7 +128,7 @@ class _MillingControlScreenState extends ConsumerState<MillingControlScreen> wit
             width: 220,
             height: 220,
             child: CircularProgressIndicator(
-              value: _progress,
+              value: _currentProgress,
               strokeWidth: 15,
               backgroundColor: theme.colorScheme.primary.withOpacity(0.1),
               strokeCap: StrokeCap.round,
@@ -131,7 +138,7 @@ class _MillingControlScreenState extends ConsumerState<MillingControlScreen> wit
           Column(
             children: [
               Text(
-                "${(_progress * 100).toInt()}%",
+                "${(_currentProgress * 100).toInt()}%",
                 style: theme.textTheme.displayMedium?.copyWith(
                   fontWeight: FontWeight.bold,
                   color: theme.colorScheme.secondary,
@@ -152,14 +159,23 @@ class _MillingControlScreenState extends ConsumerState<MillingControlScreen> wit
   }
 
   Widget _buildControls(ThemeData theme, AppLocalizations l10n) {
+    final bleService = ref.read(bleServiceProvider);
+    final isMilling = ref.watch(bleServiceProvider.select((s) => s.isMilling));
+
     return Row(
       children: [
         Expanded(
           child: ModernButton(
-            label: _isPaused ? "Reprendre" : "Pause",
-            icon: _isPaused ? Icons.play_arrow_rounded : Icons.pause_rounded,
+            label: !isMilling ? "Reprendre" : "Pause",
+            icon: !isMilling ? Icons.play_arrow_rounded : Icons.pause_rounded,
             isSecondary: true,
-            onPressed: () => setState(() => _isPaused = !_isPaused),
+            onPressed: () {
+              if (isMilling) {
+                bleService.pauseSensorSimulation();
+              } else {
+                bleService.resumeSensorSimulation();
+              }
+            },
           ),
         ),
         const SizedBox(width: 16),
@@ -167,7 +183,10 @@ class _MillingControlScreenState extends ConsumerState<MillingControlScreen> wit
           child: ModernButton(
             label: l10n.stop,
             icon: Icons.stop_rounded,
-            onPressed: () => context.go('/home'),
+            onPressed: () {
+              bleService.stopSensorSimulation(status: 'failed');
+              context.go('/home');
+            },
           ),
         ),
       ],

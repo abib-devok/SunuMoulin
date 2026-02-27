@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -8,6 +9,8 @@ import 'package:sunu_moulin_smarteco/widgets/app_drawer.dart';
 import 'package:sunu_moulin_smarteco/widgets/shimmer_loading.dart';
 import 'package:sunu_moulin_smarteco/widgets/modern_button.dart';
 import 'package:sunu_moulin_smarteco/widgets/glass_card.dart';
+import 'package:sunu_moulin_smarteco/services/ble_service.dart';
+import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 
 class MillDevice {
   final String id;
@@ -55,11 +58,162 @@ class _ConnectToMillScreenState extends ConsumerState<ConnectToMillScreen> {
     ];
   }
 
+  StreamSubscription? _scanSubscription;
+  Timer? _throttleTimer;
+  List<MillDevice> _lastResults = [];
+
+  @override
+  void dispose() {
+    _scanSubscription?.cancel();
+    _throttleTimer?.cancel();
+    super.dispose();
+  }
+
   Future<void> _startScan() async {
+    if (_isScanning) return;
+    
     setState(() => _isScanning = true);
-    await Future.delayed(const Duration(seconds: 2));
-    if (mounted) {
-      setState(() => _isScanning = false);
+    
+    // On réinitialise la liste avec le device simulé
+    setState(() {
+      _nearbyMills = [
+        MillDevice(
+          id: 'simulated_123',
+          name: 'Sunu Moulin #123',
+          status: 'Available',
+          signalStrength: 'strong',
+          isSimulated: true,
+        ),
+      ];
+    });
+
+    try {
+      final bleService = ref.read(bleServiceProvider);
+      
+      // Demande les permissions
+      final hasPermission = await bleService.requestBluetoothPermissions();
+      if (!hasPermission) {
+        if (mounted) {
+           ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Permissions Bluetooth requises pour scanner')),
+          );
+          setState(() => _isScanning = false);
+        }
+        return;
+      }
+
+      // On s'abonne aux résultats du scan en temps réel avec throttling
+      await _scanSubscription?.cancel();
+      _scanSubscription = FlutterBluePlus.scanResults.listen((results) {
+        if (!mounted) return;
+
+        // On prépare les nouveaux devices dans une variable temporaire
+        final List<MillDevice> updatedDevices = [
+          MillDevice(
+            id: 'simulated_123',
+            name: 'Sunu Moulin #123',
+            status: 'Available',
+            signalStrength: 'strong',
+            isSimulated: true,
+          ),
+        ];
+
+        for (final r in results) {
+          String signal = 'weak';
+          if (r.rssi > -60) {
+            signal = 'strong';
+          } else if (r.rssi > -80) {
+            signal = 'medium';
+          }
+
+          String name = "";
+          
+          // 1. Priorité aux champs standards
+          if (r.advertisementData.advName.isNotEmpty) {
+            name = r.advertisementData.advName;
+          } else if (r.device.platformName.isNotEmpty) {
+            name = r.device.platformName;
+          } 
+
+          // 2. Extraction intelligente depuis Manufacturer Data (cas pour certains PCs et Android)
+          if (name.isEmpty) {
+            for (var entry in r.advertisementData.manufacturerData.entries) {
+              final data = entry.value;
+              
+              // Cas spécifique Microsoft (Company ID 6) : le nom est souvent à l'index 10+
+              if (entry.key == 6 && data.length > 10) {
+                try {
+                  final possibleName = String.fromCharCodes(data.skip(10));
+                  if (possibleName.trim().isNotEmpty && possibleName.runes.every((rk) => rk >= 32 && rk <= 126)) {
+                    name = possibleName.trim();
+                    break;
+                  }
+                } catch (_) {}
+              }
+              
+              // Tentative générique
+              if (name.isEmpty && data.length >= 4) {
+                 try {
+                  final possibleName = String.fromCharCodes(data);
+                   final printableMatch = RegExp(r'[a-zA-Z0-9\-\s]{4,}').firstMatch(possibleName);
+                   if (printableMatch != null) {
+                     name = printableMatch.group(0)!.trim();
+                     break;
+                   }
+                } catch (_) {}
+              }
+            }
+          }
+
+          // Fallback ultime
+          if (name.isEmpty) {
+            name = "Appareil Inconnu (${r.device.remoteId.toString().substring(0, 5)})";
+          } else {
+            debugPrint('📡 Appareil détecté : $name (${r.device.remoteId})');
+          }
+
+          updatedDevices.add(
+            MillDevice(
+              id: r.device.remoteId.toString(),
+              name: name,
+              status: 'Available',
+              signalStrength: signal,
+              isSimulated: false,
+            ),
+          );
+        }
+
+        // Throttling : On ne met à jour l'UI que toutes les 500ms max
+        _lastResults = updatedDevices;
+        if (_throttleTimer?.isActive ?? false) return;
+
+        _throttleTimer = Timer(const Duration(milliseconds: 500), () {
+          if (mounted) {
+            setState(() {
+              _nearbyMills = _lastResults;
+            });
+          }
+        });
+      });
+
+      // Lance le scan via le service
+      await bleService.scanForDevices();
+      
+    } catch (e) {
+      debugPrint('Erreur pendant le scan: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Erreur de scan: $e')),
+        );
+      }
+    } finally {
+      await _scanSubscription?.cancel();
+      _throttleTimer?.cancel();
+      if (mounted) {
+        setState(() {
+          _isScanning = false;
+        });
+      }
     }
   }
 
@@ -102,6 +256,7 @@ class _ConnectToMillScreenState extends ConsumerState<ConnectToMillScreen> {
                   ))
                 else
                   ..._nearbyMills.map((mill) => FadeInUp(
+                    key: ValueKey(mill.id),
                     child: _MillDeviceCard(mill: mill),
                   )),
                 const SizedBox(height: 100),
